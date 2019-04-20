@@ -161,7 +161,7 @@ void separateChannels(const uchar4* const inputImageRGBA,
 	int xbind = blockIdx.x;
 	int ybind = blockIdx.y;
 
-	int sizex = numCols/thread_x + 1;
+	int sizex = gridDim.x; 
 	int realind = (xbind + sizex*ybind)*thread_x*thread_y + xind + yind*thread_x;
 	if (realind < numRows*numCols){
 		uchar4 rgba = inputImageRGBA[realind];
