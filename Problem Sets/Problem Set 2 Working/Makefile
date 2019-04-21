@@ -25,7 +25,7 @@ CUDA_INCLUDEPATH=/usr/local/cuda-10.0/include
 #CUDA_INCLUDEPATH=/usr/local/cuda/include
 #CUDA_LIBPATH=/usr/local/cuda/lib
 
-NVCC_OPTS=-O3 -arch=sm_53 -Xcompiler -Wall -Xcompiler -Wextra -rdc=true -lcudadevrt -m64
+NVCC_OPTS=-O3 -arch=sm_53 -Xcompiler -Wall -Xcompiler -Wextra -m64
 
 GCC_OPTS=-O3 -Wall -Wextra
 
@@ -35,8 +35,8 @@ student: main.o student_func.o compare.o reference_calc.o Makefile
 main.o: main.cpp timer.h utils.h HW2.cpp
 	g++ -c main.cpp $(GCC_OPTS) -I $(OPENCV_INCLUDEPATH) -I $(CUDA_INCLUDEPATH)
 
-student_func.o: student_func_nestedpara.cu reference_calc.cpp utils.h
-	nvcc -c student_func_nestedpara.cu $(NVCC_OPTS)
+student_func.o: student_func.cu reference_calc.cpp utils.h
+	nvcc -c student_func.cu $(NVCC_OPTS)
 
 compare.o: compare.cpp compare.h
 	g++ -c compare.cpp -I $(OPENCV_INCLUDEPATH) $(GCC_OPTS) -I $(CUDA_INCLUDEPATH)
