@@ -105,8 +105,8 @@
 #include <cassert>
 #include <cuda_runtime.h>
 
-const uint8_t thread_x = 32;
-const uint8_t thread_y = 32;
+const int thread_x = 1024;
+const int thread_y = 1;
 
 	__global__
 void gaussian_blur(const unsigned char* const inputChannel,
