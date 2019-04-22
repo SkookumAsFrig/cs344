@@ -107,9 +107,14 @@ int main(int argc, char **argv) {
 	min_logLum = std::min(h_luminance[i], min_logLum);
     max_logLum = std::max(h_luminance[i], max_logLum);
   }
-
+  printf("min from reference is %f\n", min_logLum);
+  printf("max from reference is %f\n", max_logLum);
+  
+  timer.Start();
   referenceCalculation(h_luminance, h_cdf, numRows, numCols, numBins, min_logLum, max_logLum);
-  printf("reference max is %f, reference min is %f\n", max_logLum, min_logLum);
+  timer.Stop();
+  printf("CPU code ran in: %f msecs.\n", timer.Elapsed());
+
   checkCudaErrors(cudaMemcpy(d_cdf, h_cdf, sizeof(unsigned int) * numBins, cudaMemcpyHostToDevice));
 
   //check results and output the tone-mapped image
