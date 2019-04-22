@@ -100,11 +100,14 @@ int main(int argc, char **argv) {
 	checkCudaErrors(cudaMemcpy(h_outputImageRGBA, d_outputImageRGBA__, sizeof(uchar4) * numPixels, cudaMemcpyDeviceToHost));
 
 	postProcess(output_file, h_outputImageRGBA);
-
+	
+	timer.Start();
 	referenceCalculation(h_inputImageRGBA, h_outputImageRGBA,
 			numRows(), numCols(),
 			h_filter, filterWidth);
-
+	timer.Stop();
+	printf("CPU code ran in: %f msecs.\n", timer.Elapsed());
+	
 	postProcess(reference_file, h_outputImageRGBA);
 
 	//  Cheater easy way with OpenCV

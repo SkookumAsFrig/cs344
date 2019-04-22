@@ -145,13 +145,16 @@ void gaussian_blur(const unsigned char* const inputChannel,
 	//by having any threads mapped there return early
 	if (thread_2D_pos.x >= numCols || thread_2D_pos.y >= numRows)
 		return;
-	float result = 0.f;
+	volatile float result = 0.f;
 	extern __shared__ float sm_in[];
+	const int pixcount = thread_x*thread_y;
 	int sharedidx = threadIdx.x + threadIdx.y*blockDim.x;
 	sm_in[sharedidx] = float(inputChannel[thread_1D_pos]);
+	if (sharedidx < filterWidth*filterWidth)
+		sm_in[pixcount + sharedidx] = filter[sharedidx]; 
 	__syncthreads();
 	
-	float image_value = 0.f;
+	volatile float image_value = 0.f;
 	for (int filter_r = -filterWidth/2; filter_r <= filterWidth/2; ++filter_r) {
 		for (int filter_c = -filterWidth/2; filter_c <= filterWidth/2; ++filter_c) {
 			//Find the global image position for this filter position
@@ -168,7 +171,7 @@ void gaussian_blur(const unsigned char* const inputChannel,
 			else{
 				image_value = float(inputChannel[image_r * numCols + image_c]);
 			}
-			float filter_value = filter[(filter_r + filterWidth/2) * filterWidth + filter_c + filterWidth/2];
+			float filter_value = sm_in[pixcount + (filter_r + filterWidth/2) * filterWidth + filter_c + filterWidth/2];
 
 			result += image_value * filter_value;
 		}
@@ -295,7 +298,7 @@ void your_gaussian_blur(const uchar4 * const h_inputImageRGBA, uchar4 * const d_
 	int gridy = numRows/thread_y + 1;
 	const dim3 gridSize(gridx, gridy, 1);
 
-	const size_t shmemSZ = thread_x*thread_y*sizeof(float);
+	const size_t shmemSZ = (thread_x*thread_y + filterWidth*filterWidth)*sizeof(float);
 	//TODO: Launch a kernel for separating the RGBA image into different color channels
 
 	separateChannels<<<gridSize, blockSize>>>(d_inputImageRGBA, numRows, numCols, d_red, d_green, d_blue);
