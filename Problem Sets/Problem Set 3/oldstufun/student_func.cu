@@ -132,7 +132,7 @@ __global__ void shmem_reduce_max (const float* const d_in,
 	}
 	__syncthreads();
 
-	for (unsigned int i = ceilf(blockDim.x*blockDim.y/2); i>0; i>>=1){
+	for (unsigned int i = blockDim.x*blockDim.y/2; i>0; i>>=1){
 		if (tid < i){
 			temp_dlogLum[tid] = max(temp_dlogLum[tid], temp_dlogLum[tid + i]);
 		}
@@ -167,64 +167,6 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	  4) Perform an exclusive scan (prefix sum) on the histogram to get
 	  the cumulative distribution of luminance values (this should go in the
 	  incoming d_cdf pointer which already has been allocated for you)       */
-	int numpix = numRows*numCols;
-	float *d_inter, *d_min, *d_max;
-	checkCudaErrors(cudaMalloc(&d_inter, numpix*sizeof(float)));
-	checkCudaErrors(cudaMemset(d_inter, 126, numpix*sizeof(float)));
-	checkCudaErrors(cudaMalloc(&d_min, sizeof(float)));
-	checkCudaErrors(cudaMemset(d_min, 0, sizeof(float)));
-	checkCudaErrors(cudaMalloc(&d_max, sizeof(float)));
-	checkCudaErrors(cudaMemset(d_max, 0, sizeof(float)));
 
-	const int gridx = ceil(numCols/thread_x);
-	const int gridy = ceil(numRows/thread_y);
-	const dim3 gridSizeMM(gridx, gridy, 1);
-	const dim3 blockSizeMM(thread_x, thread_y, 1);
-
-	printf("gridx is %d, gridy is %d\n", gridx, gridy);
-
-	const size_t shmemSZ = (thread_x*thread_y) * sizeof(float);
-
-	shmem_reduce_min<<<gridSizeMM, blockSizeMM, shmemSZ>>>
-		(d_logLuminance, numRows, numCols, d_inter);
-
-	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-	
-	float h_inter[numpix];
-	checkCudaErrors(cudaMemcpy(h_inter, d_inter, numpix*sizeof(float), cudaMemcpyDeviceToHost));
-	for (int j=0; j<256; j++){
-		printf("minval is %f at %d\n", h_inter[j], j);
-	}
-	
-	const int grids = 1;
-	const dim3 blocks = gridSizeMM;
-
-	shmem_reduce_min<<<grids, blocks, shmemSZ>>>
-		(d_inter, gridy, gridx, d_min);
-
-	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-        
-	checkCudaErrors(cudaMemcpy(&min_logLum, d_min, sizeof(float), cudaMemcpyDeviceToHost));
-	printf("smallest number is: %f\n", min_logLum);
-//////////////////////////////////////////////////////////////////////MIN DONE, NOW MAX
-
-	checkCudaErrors(cudaMemset(d_inter, 240, numpix*sizeof(float)));
-	shmem_reduce_max<<<gridSizeMM, blockSizeMM, shmemSZ>>>
-                (d_logLuminance, numRows, numCols, d_inter);
-
-        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-
-        checkCudaErrors(cudaMemcpy(h_inter, d_inter, numpix*sizeof(float), cudaMemcpyDeviceToHost));
-        for (int j=0; j<256; j++){
-                printf("maxval is %f at %d\n", h_inter[j], j);
-        }
-
-        shmem_reduce_max<<<grids, blocks, shmemSZ>>>
-                (d_inter, gridy, gridx, d_max);
-
-        cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-
-        checkCudaErrors(cudaMemcpy(&max_logLum, d_max, sizeof(float), cudaMemcpyDeviceToHost));
-        printf("biggest number is: %f\n", max_logLum);
 
 }
