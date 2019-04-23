@@ -160,6 +160,9 @@ __global__ void shmem_histo (const float* const d_in,
 		const size_t numCols, const size_t numBins,
 		int *d_globalbins)//, uint8_t sw)
 {
+	extern __shared__ uint16_t localhisto[];
+	//use with size declaration = numBins*blockDim.x*blockDim.y
+
 	const int2 myID = make_int2(threadIdx.x + blockDim.x * blockIdx.x,
 			threadIdx.y + blockDim.y * blockIdx.y);
 	const int myID1D = myID.y*gridDim.x*blockDim.x + myID.x;
@@ -167,13 +170,78 @@ __global__ void shmem_histo (const float* const d_in,
 	const int tid = threadIdx.x + threadIdx.y * blockDim.x;
 	const int thnum = blockDim.x*blockDim.y;
 
+	/////ALWAYS HAVE TO INITIALIZE LOCAL MEMORY!!!! IT IS PERSISTENT BETWEEN BLOCK RUNS!!!! BAD!!!
+	for (int i = 0; i<numBins; i++){
+		int indim = myID1D*numBins + i;
+		if (indim<numBins*thnum)
+			localhisto[indim] = 0;
+		else
+			printf("Init OOB: %d, myID1D is %d\n", indim, myID1D);
+	}
+	__syncthreads();
+
 	for (int i = 0; i<numItems; i++){
 		int indim = myID1D*numItems + i;
 		if (indim<numRows*numCols){
 			int bin = (d_in[indim] - lumMin) / lumRange * numBins;
-			atomicAdd(&(d_globalbins[bin]), 1);
+			int lhidx = tid + bin*thnum;
+			localhisto[lhidx]++;
+		}else
+			printf("out of bounds: %d, myID1D is %d\n", indim, myID1D);
+	}
+
+	/*
+	   for (int i = 0; i<numBins; i++){
+	   int indim = myID1D*numBins + i;
+	   if (indim<numBins*thnum)
+	   localhisto[indim] = 1;
+	   else
+	   printf("out of bounds: %d, myID1D is %d\n", indim, myID1D);
+	   }
+	 */
+	//__syncthreads();
+	//printf("loop thing is %d\n", 2<<__float2int_rn(ceilf(log2f(thnum) - 2)));
+
+	/////////////////////////////////LOCAL ACCUM
+	for (unsigned int j = 2<<__float2int_rn(ceilf(log2f(thnum) - 2)); j>0; j>>=1){
+		if (tid < j){
+			int lid = tid;
+			int rid = tid+j;
+			if (rid<thnum){
+				for (int k = 0; k<numBins; k++){
+					localhisto[lid + k*thnum] = localhisto[lid + k*thnum] + localhisto[rid + k*thnum];
+				}
+			}
+		}
+		__syncthreads();
+	}
+
+	/*
+	   if (tid == 0){
+	   for(int i = 0; i<numBins; i++){
+	   int cumsum = 0;
+	   for(int j = 0; j<thnum; j++){
+	   cumsum += localhisto[i*thnum + j];
+	   }
+	   localhisto[i*thnum] = cumsum;
+	   }
+	   }
+	 */
+	//////////////////////////////GLOABAL ACCUM
+	const int workdistb = numBins/16;
+	if (tid < 16){
+		for (int k = 0; k<workdistb; k++){
+			int localwd = tid*workdistb + k;
+			atomicAdd(&(d_globalbins[localwd]), localhisto[localwd*thnum]);
 		}
 	}
+	/*
+	   if (tid == 0){
+	   for (int k = 0; k<numBins; k++){
+	   d_globalbins[k] = localhisto[k*thnum];
+	   }
+	   }
+	 */
 
 }
 
@@ -272,27 +340,32 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	checkCudaErrors(cudaMalloc(&d_bins, numBins*sizeof(int)));
 	checkCudaErrors(cudaMemset(d_bins, 0, numBins*sizeof(int)));
 
-	const int hthreadx = 32;
-	const int hthready = 32;
+	const int hthreadx = 4;
+	const int hthready = 6;
 	const int hgridx = 1;
 	const int hgridy = 1;
 	const dim3 hgridSize(hgridx, hgridy, 1);
 	const dim3 hblockSize(hthreadx, hthready, 1);
 	const int numPerTh = ceil(numRows*numCols/(hthreadx*hthready));
 
-	shmem_histo<<<hgridSize, hblockSize>>>
+	const size_t HshmemSZ = numBins*hthreadx*hthready*sizeof(uint16_t);
+	printf("Histogram Requested Shared Memory Size is %d Bytes, numbins = %d\n", HshmemSZ, numBins);
+
+	shmem_histo<<<hgridSize, hblockSize, HshmemSZ>>>
 		(d_logLuminance, numPerTh, min_logLum, dlogRange, numRows, numCols, numBins, d_bins);
 
 	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-
+	/*
 	int h_bins[numBins];
 	checkCudaErrors(cudaMemcpy(&h_bins[0], d_bins, numBins*sizeof(int), cudaMemcpyDeviceToHost));
-	/*
+	
 	float rsum = 0.f;
 	for (int j=0; j<numBins; j++){
-		printf("%d bin count is %d\n", j, h_bins[j]);
+		//printf("%d bin count is %d\n", j, h_bins[j]);
 		rsum += h_bins[j];
 	}
 	printf("sum is %f\n", rsum);
 	*/
+	checkCudaErrors(cudaFree(d_inter));
+	checkCudaErrors(cudaFree(d_bins));
 }

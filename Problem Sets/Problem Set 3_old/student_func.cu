@@ -164,8 +164,8 @@ __global__ void shmem_histo (const float* const d_in,
 			threadIdx.y + blockDim.y * blockIdx.y);
 	const int myID1D = myID.y*gridDim.x*blockDim.x + myID.x;
 
-	const int tid = threadIdx.x + threadIdx.y * blockDim.x;
-	const int thnum = blockDim.x*blockDim.y;
+	//const int tid = threadIdx.x + threadIdx.y * blockDim.x;
+	//const int thnum = blockDim.x*blockDim.y;
 
 	for (int i = 0; i<numItems; i++){
 		int indim = myID1D*numItems + i;
@@ -284,14 +284,15 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 		(d_logLuminance, numPerTh, min_logLum, dlogRange, numRows, numCols, numBins, d_bins);
 
 	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-
+	/*
 	int h_bins[numBins];
 	checkCudaErrors(cudaMemcpy(&h_bins[0], d_bins, numBins*sizeof(int), cudaMemcpyDeviceToHost));
+	
 	float rsum = 0.f;
 	for (int j=0; j<numBins; j++){
 		printf("%d bin count is %d\n", j, h_bins[j]);
 		rsum += h_bins[j];
 	}
 	printf("sum is %f\n", rsum);
-
+	*/
 }
