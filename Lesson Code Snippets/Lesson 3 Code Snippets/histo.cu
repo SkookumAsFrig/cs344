@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <cuda_runtime.h>
 
+//Compile with nvcc -o histogram histo.cu -O3
+
 int log2(int i)
 {
     int r = 0;

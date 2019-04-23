@@ -160,9 +160,6 @@ __global__ void shmem_histo (const float* const d_in,
 		const size_t numCols, const size_t numBins,
 		int *d_globalbins)//, uint8_t sw)
 {
-	extern __shared__ uint16_t localhisto[];
-	//use with size declaration = numBins*blockDim.x*blockDim.y
-
 	const int2 myID = make_int2(threadIdx.x + blockDim.x * blockIdx.x,
 			threadIdx.y + blockDim.y * blockIdx.y);
 	const int myID1D = myID.y*gridDim.x*blockDim.x + myID.x;
@@ -174,27 +171,8 @@ __global__ void shmem_histo (const float* const d_in,
 		int indim = myID1D*numItems + i;
 		if (indim<numRows*numCols){
 			int bin = (d_in[indim] - lumMin) / lumRange * numBins;
-			int lhidx = tid + bin*thnum;
-			localhisto[lhidx]++;
+			atomicAdd(&(d_globalbins[bin]), 1);
 		}
-	}
-	__syncthreads();
-
-	for (unsigned int j = 2<<__float2int_rn(ceilf(log2f(thnum) - 2)); j>0; j>>=1){
-		if (tid < j){
-			int lid = tid;
-			int rid = tid+j;
-			if (rid<thnum){
-				for (int k = 0; k<numBins; k++){
-					localhisto[lid + k*thnum] = localhisto[lid + k*thnum] + localhisto[rid + k*thnum];
-				}
-			}
-		}
-		__syncthreads();
-	}
-
-	if (tid < numBins){
-		atomicAdd(&(d_globalbins[tid]), localhisto[tid*thnum]);
 	}
 
 }
@@ -294,18 +272,15 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	checkCudaErrors(cudaMalloc(&d_bins, numBins*sizeof(int)));
 	checkCudaErrors(cudaMemset(d_bins, 0, numBins*sizeof(int)));
 
-	const int hthreadx = 4;
-	const int hthready = 6;
+	const int hthreadx = 32;
+	const int hthready = 32;
 	const int hgridx = 1;
 	const int hgridy = 1;
 	const dim3 hgridSize(hgridx, hgridy, 1);
 	const dim3 hblockSize(hthreadx, hthready, 1);
 	const int numPerTh = ceil(numRows*numCols/(hthreadx*hthready));
 
-	const size_t HshmemSZ = numBins*hthreadx*hthready*sizeof(uint16_t);
-	printf("Histogram Requested Shared Memory Size is %d Bytes, numbins = %d\n", HshmemSZ, numBins);
-
-	shmem_histo<<<hgridSize, hblockSize, HshmemSZ>>>
+	shmem_histo<<<hgridSize, hblockSize>>>
 		(d_logLuminance, numPerTh, min_logLum, dlogRange, numRows, numCols, numBins, d_bins);
 
 	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());

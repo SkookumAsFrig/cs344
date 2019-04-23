@@ -101,8 +101,8 @@ __global__ void shmem_reduce_min (const float* const d_in,
 		temp_dlogLum[tid] = FLT_MAX;
 	}
 	__syncthreads();
-
-	for (unsigned int i = ceilf(blockDim.x*blockDim.y/2); i>0; i>>=1){
+	//pow(2, ceilf(log2f(blockDim.x*blockDim.y) - 1))
+	for (unsigned int i = 2<<__float2int_rn(ceilf(log2f(blockDim.x*blockDim.y) - 2)); i>0; i>>=1){
 		if (tid < i){
 			temp_dlogLum[tid] = min(temp_dlogLum[tid], temp_dlogLum[tid + i]);
 		}
@@ -117,7 +117,7 @@ __global__ void shmem_reduce_min (const float* const d_in,
 
 __global__ void shmem_reduce_max (const float* const d_in,
 		const size_t numRows, const size_t numCols,
-		float* d_result_min)
+		float* d_result_min)//, uint8_t sw)
 {
 	extern __shared__ float temp_dlogLum[];
 	const int2 myID = make_int2(threadIdx.x + blockDim.x * blockIdx.x,
@@ -127,13 +127,22 @@ __global__ void shmem_reduce_max (const float* const d_in,
 	if (!(myID.x >= numCols || myID.y >= numRows)){
 		const int myID1D = myID.y * numCols + myID.x;
 		temp_dlogLum[tid] = d_in[myID1D];
+		/*if(sw){
+		  printf("shemem value is %f, at tid %d and myID %d\n", temp_dlogLum[tid], tid, myID1D);
+		  }*/
 	}else{
 		temp_dlogLum[tid] = FLT_MIN;
 	}
 	__syncthreads();
-
-	for (unsigned int i = blockDim.x*blockDim.y/2; i>0; i>>=1){
+	//printf("%d\n", 2<<__float2int_rn(ceilf(log2f(blockDim.x*blockDim.y) - 2)));
+	for (unsigned int i = 2<<__float2int_rn(ceilf(log2f(blockDim.x*blockDim.y) - 2)); i>0; i>>=1){
 		if (tid < i){
+			/*
+			   if(tid == 44 || tid == 20 || tid == 8 || tid == 2 || tid == 1 || tid == 0){
+			   printf("tid is at problem loc %d, values are small = %f, big = %f\n",
+			   tid, temp_dlogLum[tid], temp_dlogLum[tid + i]);
+			   }
+			 */
 			temp_dlogLum[tid] = max(temp_dlogLum[tid], temp_dlogLum[tid + i]);
 		}
 		__syncthreads();
@@ -143,6 +152,53 @@ __global__ void shmem_reduce_max (const float* const d_in,
 	{
 		d_result_min[blockIdx.x + blockIdx.y * gridDim.x] = temp_dlogLum[0];
 	}
+}
+
+__global__ void shmem_histo (const float* const d_in,
+		const size_t numItems, const float lumMin,
+		const float lumRange, const size_t numRows,
+		const size_t numCols, const size_t numBins,
+		int *d_globalbins)//, uint8_t sw)
+{
+	extern __shared__ uint16_t localhisto[];
+	//use with size declaration = numBins*blockDim.x*blockDim.y
+
+	const int2 myID = make_int2(threadIdx.x + blockDim.x * blockIdx.x,
+			threadIdx.y + blockDim.y * blockIdx.y);
+	const int myID1D = myID.y*gridDim.x*blockDim.x + myID.x;
+
+	const int tid = threadIdx.x + threadIdx.y * blockDim.x;
+	const int thnum = blockDim.x*blockDim.y;
+
+	for (int i = 0; i<numItems; i++){
+		int indim = myID1D*numItems + i;
+		if (indim<numRows*numCols){
+			int bin = (d_in[indim] - lumMin) / lumRange * numBins;
+			int lhidx = tid + bin*thnum;
+			localhisto[lhidx]++;
+		}
+	}
+	__syncthreads();
+	//printf("loop thing is %d\n", 2<<__float2int_rn(ceilf(log2f(thnum) - 2)));
+	for (unsigned int j = 2<<__float2int_rn(ceilf(log2f(thnum) - 2)); j>0; j>>=1){
+		if (tid < j){
+			int lid = tid;
+			int rid = tid+j;
+			if (rid<thnum){
+				for (int k = 0; k<numBins; k++){
+					localhisto[lid + k*thnum] = localhisto[lid + k*thnum] + localhisto[rid + k*thnum];
+				}
+			}
+		}
+		__syncthreads();
+	}
+
+	if (tid == 0){
+		for (int k = 0; k<numBins; k++){
+			d_globalbins[k] = localhisto[k*thnum];
+		}
+	}
+
 }
 
 
@@ -167,6 +223,102 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	  4) Perform an exclusive scan (prefix sum) on the histogram to get
 	  the cumulative distribution of luminance values (this should go in the
 	  incoming d_cdf pointer which already has been allocated for you)       */
+	int numpix = numRows*numCols;
+	float *d_inter, *d_min, *d_max;
+	checkCudaErrors(cudaMalloc(&d_inter, numpix*sizeof(float)));
+	checkCudaErrors(cudaMemset(d_inter, 126, numpix*sizeof(float)));
+	checkCudaErrors(cudaMalloc(&d_min, sizeof(float)));
+	checkCudaErrors(cudaMemset(d_min, 0, sizeof(float)));
+	checkCudaErrors(cudaMalloc(&d_max, sizeof(float)));
+	checkCudaErrors(cudaMemset(d_max, 0, sizeof(float)));
 
+	const int gridx = ceil(numCols/thread_x);
+	const int gridy = ceil(numRows/thread_y);
+	const dim3 gridSizeMM(gridx, gridy, 1);
+	const dim3 blockSizeMM(thread_x, thread_y, 1);
+
+	//printf("gridx is %d, gridy is %d\n", gridx, gridy);
+
+	const size_t shmemSZ = (thread_x*thread_y) * sizeof(float);
+
+	shmem_reduce_min<<<gridSizeMM, blockSizeMM, shmemSZ>>>
+		(d_logLuminance, numRows, numCols, d_inter);
+
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+	/*
+	   float h_inter[numpix];
+	   checkCudaErrors(cudaMemcpy(h_inter, d_inter, numpix*sizeof(float), cudaMemcpyDeviceToHost));
+	   for (int j=0; j<256; j++){
+	   printf("minval is %f at %d\n", h_inter[j], j);
+	   }
+	 */
+	const int grids = 1;
+	const dim3 blocks = gridSizeMM;
+
+	shmem_reduce_min<<<grids, blocks, shmemSZ>>>
+		(d_inter, gridy, gridx, d_min);
+
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+	checkCudaErrors(cudaMemcpy(&min_logLum, d_min, sizeof(float), cudaMemcpyDeviceToHost));
+	//printf("smallest number is: %f\n", min_logLum);
+	//////////////////////////////////////////////////////////////////////MIN DONE, NOW MAX
+
+	checkCudaErrors(cudaMemset(d_inter, 240, numpix*sizeof(float)));
+	shmem_reduce_max<<<gridSizeMM, blockSizeMM, shmemSZ>>>
+		(d_logLuminance, numRows, numCols, d_inter);
+
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+	/*
+	   checkCudaErrors(cudaMemcpy(h_inter, d_inter, numpix*sizeof(float), cudaMemcpyDeviceToHost));
+	   for (int j=0; j<400; j++){
+	   printf("maxval is %f at %d\n", h_inter[j], j);
+	   }
+	 */
+	shmem_reduce_max<<<grids, blocks, shmemSZ>>>
+		(d_inter, gridy, gridx, d_max);
+
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+	checkCudaErrors(cudaMemcpy(&max_logLum, d_max, sizeof(float), cudaMemcpyDeviceToHost));
+	//printf("biggest number is: %f\n", max_logLum);
+	///////////////////////////////////////////////////////////////////////MAX DONE
+	const float dlogRange = max_logLum - min_logLum;
+
+	/*
+	   shmem_histo (const float* const d_in,
+	   const size_t numItems, const float lumMin,
+	   const float lumRange, const size_t numRows,
+	   const size_t numCols, const size_t numBins,
+	   int* d_globalbins)//, uint8_t sw)
+	 */
+	int *d_bins;
+	checkCudaErrors(cudaMalloc(&d_bins, numBins*sizeof(int)));
+	checkCudaErrors(cudaMemset(d_bins, 0, numBins*sizeof(int)));
+
+	const int hthreadx = 4;
+	const int hthready = 6;
+	const int hgridx = 1;
+	const int hgridy = 1;
+	const dim3 hgridSize(hgridx, hgridy, 1);
+	const dim3 hblockSize(hthreadx, hthready, 1);
+	const int numPerTh = ceil(numRows*numCols/(hthreadx*hthready));
+
+	const size_t HshmemSZ = numBins*hthreadx*hthready*sizeof(uint16_t);
+	printf("Histogram Requested Shared Memory Size is %d Bytes, numbins = %d\n", HshmemSZ, numBins);
+
+	shmem_histo<<<hgridSize, hblockSize, HshmemSZ>>>
+		(d_logLuminance, numPerTh, min_logLum, dlogRange, numRows, numCols, numBins, d_bins);
+
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
+	int h_bins[numBins];
+	checkCudaErrors(cudaMemcpy(&h_bins[0], d_bins, numBins*sizeof(int), cudaMemcpyDeviceToHost));
+	float rsum = 0.f;
+	for (int j=0; j<numBins; j++){
+		printf("%d bin count is %d\n", j, h_bins[j]);
+		rsum += h_bins[j];
+	}
+	printf("sum is %f\n", rsum);
 
 }
