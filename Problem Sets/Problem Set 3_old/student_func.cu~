@@ -177,22 +177,35 @@ __global__ void shmem_histo (const float* const d_in,
 
 }
 
-__global__ void blelloch_scan (const float* const d_bins_in,
-                const size_t numBins, int *d_result)
+__global__ void blelloch_scan (int *d_bins_io,
+                const size_t numBins)
 {
         const int2 myID = make_int2(threadIdx.x + blockDim.x * blockIdx.x,
                         threadIdx.y + blockDim.y * blockIdx.y);
         const int myID1D = myID.y*gridDim.x*blockDim.x + myID.x;
 
-        //const int tid = threadIdx.x + threadIdx.y * blockDim.x;
-        //const int thnum = blockDim.x*blockDim.y;
+        const int tid = threadIdx.x + threadIdx.y * blockDim.x;
+        const int thnum = blockDim.x*blockDim.y;
 
-        for (int i = 0; i<numItems; i++){
-                int indim = myID1D*numItems + i;
-                if (indim<numRows*numCols){
-                        int bin = (d_in[indim] - lumMin) / lumRange * numBins;
-                        atomicAdd(&(d_globalbins[bin]), 1);
+        for (unsigned int i = 2; i<=numBins; i<<=1){
+                if ((tid+1)%i == 0){
+                        unsigned int step = i>>1;
+                        d_bins_io[myID1D] += d_bins_io[myID1D-step];
                 }
+		__syncthreads();
+        }
+
+	if (tid == thnum-1) d_bins_io[myID1D] = 0;
+	__syncthreads();
+	
+	for (unsigned int j = numBins; j>0; j>>=1){
+                if ((tid+1)%j == 0){
+                        unsigned int step2 = j>>1;
+			int right = d_bins_io[myID1D];
+                        d_bins_io[myID1D] += d_bins_io[myID1D-step2];
+			d_bins_io[myID1D-step2] = right;
+                }
+		__syncthreads();
         }
 
 }
@@ -316,4 +329,11 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	}
 	printf("sum is %f\n", rsum);
 	*/
+
+	checkCudaErrors(cudaMemcpy(d_cdf, d_bins, numBins*sizeof(int), cudaMemcpyDeviceToDevice));
+	
+	blelloch_scan<<<grids, blockSizeMM>>>(d_cdf, numBins);
+
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+
 }

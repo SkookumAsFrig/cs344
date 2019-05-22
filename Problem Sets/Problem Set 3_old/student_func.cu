@@ -177,7 +177,7 @@ __global__ void shmem_histo (const float* const d_in,
 
 }
 
-__global__ void blelloch_scan (int *d_bins_io,
+__global__ void blelloch_scan (unsigned int *d_bins_io,
                 const size_t numBins)
 {
         const int2 myID = make_int2(threadIdx.x + blockDim.x * blockIdx.x,
@@ -190,20 +190,20 @@ __global__ void blelloch_scan (int *d_bins_io,
         for (unsigned int i = 2; i<=numBins; i<<=1){
                 if ((tid+1)%i == 0){
                         unsigned int step = i>>1;
-                        d_bins_io[tid] += d_bins_io[tid-step];
+                        d_bins_io[myID1D] += d_bins_io[myID1D-step];
                 }
 		__syncthreads();
         }
 
-	if (tid == 0) d_bins_io[thnum-1] = 0;
+	if (tid == thnum-1) d_bins_io[myID1D] = 0;
 	__syncthreads();
 	
 	for (unsigned int j = numBins; j>0; j>>=1){
                 if ((tid+1)%j == 0){
                         unsigned int step2 = j>>1;
-			int right = d_bins_io[tid];
-                        d_bins_io[tid] += d_bins_io[tid-step2];
-			d_bins_io[tid-step2] = right;
+			unsigned int right = d_bins_io[myID1D];
+                        d_bins_io[myID1D] += d_bins_io[myID1D-step2];
+			d_bins_io[myID1D-step2] = right;
                 }
 		__syncthreads();
         }
@@ -330,10 +330,10 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	printf("sum is %f\n", rsum);
 	*/
 
-	blelloch_scan<<<grids, blockSizeMM>>>(d_bins, numBins);
+	checkCudaErrors(cudaMemcpy(d_cdf, d_bins, numBins*sizeof(int), cudaMemcpyDeviceToDevice));
+	
+	blelloch_scan<<<grids, blockSizeMM>>>(d_cdf, numBins);
 
 	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-	
-	checkCudaErrors(cudaMemcpy(d_cdf, d_bins, numBins*sizeof(int), cudaMemcpyDeviceToDevice));
 
 }
