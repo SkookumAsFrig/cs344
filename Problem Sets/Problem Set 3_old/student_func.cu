@@ -91,11 +91,11 @@ __global__ void shmem_reduce_min (const float* const d_in,
 {
 	extern __shared__ float temp_dlogLum[];
 	const int2 myID = make_int2(threadIdx.x + blockDim.x * blockIdx.x,
-			threadIdx.y + blockDim.y * blockIdx.y);
+			threadIdx.y + blockDim.y * blockIdx.y);//This is the thread's id within global threads
 
-	const int tid = threadIdx.x + threadIdx.y * blockDim.x;
+	const int tid = threadIdx.x + threadIdx.y * blockDim.x;//This is the thread's id within local threads
 	if (!(myID.x >= numCols || myID.y >= numRows)){
-		const int myID1D = myID.y * numCols + myID.x;
+		const int myID1D = myID.y * numCols + myID.x;//Fill the block's dlogLum local memory with block image data
 		temp_dlogLum[tid] = d_in[myID1D];
 	}else{
 		temp_dlogLum[tid] = FLT_MAX;
@@ -158,7 +158,7 @@ __global__ void shmem_histo (const float* const d_in,
 		const size_t numItems, const float lumMin,
 		const float lumRange, const size_t numRows,
 		const size_t numCols, const size_t numBins,
-		int *d_globalbins)//, uint8_t sw)
+		int *d_globalbins)
 {
 	const int2 myID = make_int2(threadIdx.x + blockDim.x * blockIdx.x,
 			threadIdx.y + blockDim.y * blockIdx.y);
@@ -176,6 +176,40 @@ __global__ void shmem_histo (const float* const d_in,
 	}
 
 }
+
+__global__ void blelloch_scan (int *d_bins_io,
+                const size_t numBins)
+{
+        const int2 myID = make_int2(threadIdx.x + blockDim.x * blockIdx.x,
+                        threadIdx.y + blockDim.y * blockIdx.y);
+        const int myID1D = myID.y*gridDim.x*blockDim.x + myID.x;
+
+        const int tid = threadIdx.x + threadIdx.y * blockDim.x;
+        const int thnum = blockDim.x*blockDim.y;
+
+        for (unsigned int i = 2; i<=numBins; i<<=1){
+                if ((tid+1)%i == 0){
+                        unsigned int step = i>>1;
+                        d_bins_io[tid] += d_bins_io[tid-step];
+                }
+		__syncthreads();
+        }
+
+	if (tid == 0) d_bins_io[thnum-1] = 0;
+	__syncthreads();
+	
+	for (unsigned int j = numBins; j>0; j>>=1){
+                if ((tid+1)%j == 0){
+                        unsigned int step2 = j>>1;
+			int right = d_bins_io[tid];
+                        d_bins_io[tid] += d_bins_io[tid-step2];
+			d_bins_io[tid-step2] = right;
+                }
+		__syncthreads();
+        }
+
+}
+
 
 
 const int thread_x = 32;
@@ -237,7 +271,7 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
 	checkCudaErrors(cudaMemcpy(&min_logLum, d_min, sizeof(float), cudaMemcpyDeviceToHost));
-	//printf("smallest number is: %f\n", min_logLum);
+	printf("smallest number is: %f\n", min_logLum);
 	//////////////////////////////////////////////////////////////////////MIN DONE, NOW MAX
 
 	checkCudaErrors(cudaMemset(d_inter, 240, numpix*sizeof(float)));
@@ -257,7 +291,7 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
 	checkCudaErrors(cudaMemcpy(&max_logLum, d_max, sizeof(float), cudaMemcpyDeviceToHost));
-	//printf("biggest number is: %f\n", max_logLum);
+	printf("biggest number is: %f\n", max_logLum);
 	///////////////////////////////////////////////////////////////////////MAX DONE
 	const float dlogRange = max_logLum - min_logLum;
 
@@ -295,4 +329,11 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	}
 	printf("sum is %f\n", rsum);
 	*/
+
+	blelloch_scan<<<grids, blockSizeMM>>>(d_bins, numBins);
+
+	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+	
+	checkCudaErrors(cudaMemcpy(d_cdf, d_bins, numBins*sizeof(int), cudaMemcpyDeviceToDevice));
+
 }
