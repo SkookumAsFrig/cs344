@@ -335,5 +335,8 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 	blelloch_scan<<<grids, blockSizeMM>>>(d_cdf, numBins);
 
 	cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
+	checkCudaErrors(cudaFree(d_inter));
+	checkCudaErrors(cudaFree(d_min));
+	checkCudaErrors(cudaFree(d_max));
 
 }

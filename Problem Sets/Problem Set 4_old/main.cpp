@@ -41,7 +41,7 @@ int main(int argc, char **argv) {
   std::string input_file;
   std::string template_file;
   std::string output_file;
-  std::string reference_file = "reference.png";
+  std::string reference_file;
   double perPixelError = 0.0;
   double globalError   = 0.0;
   bool useEpsCheck = false;
@@ -111,15 +111,13 @@ int main(int argc, char **argv) {
   thrust::host_vector<unsigned int> h_outputVals(numElems);
   thrust::host_vector<unsigned int> h_outputPos(numElems);
 
-  timer.Start();
   reference_calculation(&h_inputVals[0], &h_inputPos[0],
 						&h_outputVals[0], &h_outputPos[0],
 						numElems);
-  timer.Stop();
-  printf("CPU Code ran in %f msecs.\n", timer.Elapsed());
-  postProcess(& h_outputVals[0],& h_outputPos[0], numElems, reference_file);
 
-  compareImages(reference_file, output_file, useEpsCheck, perPixelError, globalError);
+  //postProcess(valsPtr, posPtr, numElems, reference_file);
+
+  //compareImages(reference_file, output_file, useEpsCheck, perPixelError, globalError);
 
   thrust::device_ptr<unsigned int> d_outputVals(outputVals);
   thrust::device_ptr<unsigned int> d_outputPos(outputPos);
@@ -128,9 +126,8 @@ int main(int argc, char **argv) {
                                                      d_outputVals + numElems);
   thrust::host_vector<unsigned int> h_yourOutputPos(d_outputPos,
                                                     d_outputPos + numElems);
-  printf("Checking outputVals... \n");
+
   checkResultsExact(&h_outputVals[0], &h_yourOutputVals[0], numElems);
-  printf("Checking outputPos... \n");
   checkResultsExact(&h_outputPos[0], &h_yourOutputPos[0], numElems);
 
   checkCudaErrors(cudaFree(inputVals));

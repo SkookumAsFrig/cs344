@@ -126,7 +126,7 @@ __global__ void swapLocs (unsigned int* d_inputVals, unsigned int* d_inputPos,
 
 }
 
-__global__ void old_prototype (unsigned int* d_inputVals, unsigned int* const d_inputPos,
+__global__ void histo_offset (unsigned int* d_inputVals, unsigned int* const d_inputPos,
 		unsigned int* d_outputVals, unsigned int* d_outputPos,
 		unsigned int* d_binHistogram,
 		unsigned int* d_offsetvec,
