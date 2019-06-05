@@ -117,9 +117,9 @@ int main(int argc, char **argv) {
 						numElems);
   timer.Stop();
   printf("CPU Code ran in %f msecs.\n", timer.Elapsed());
-  postProcess(& h_outputVals[0],& h_outputPos[0], numElems, reference_file);
+  //postProcess(& h_outputVals[0],& h_outputPos[0], numElems, reference_file);
 
-  compareImages(reference_file, output_file, useEpsCheck, perPixelError, globalError);
+  //compareImages(reference_file, output_file, useEpsCheck, perPixelError, globalError);
 
   thrust::device_ptr<unsigned int> d_outputVals(outputVals);
   thrust::device_ptr<unsigned int> d_outputPos(outputPos);
