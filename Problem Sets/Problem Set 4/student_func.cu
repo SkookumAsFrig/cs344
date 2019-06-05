@@ -46,44 +46,42 @@ at the end.
  */
 
 const unsigned int bitdepth = 8*sizeof(unsigned int);
-const unsigned int numBits = 4;
+const unsigned int numBits = 1;
 const unsigned int numBins = 1 << numBits;
 /*
-__global__ void histo_offset (unsigned int* d_inputVals,
-		unsigned int* d_binHistogram,
-		unsigned int* d_offsetvec,
-		const size_t numElems, unsigned int i)
-{
-	const int2 myID = make_int2(threadIdx.x + blockDim.x * blockIdx.x,
-			threadIdx.y + blockDim.y * blockIdx.y);
-	const int myID1D = myID.y*gridDim.x*blockDim.x + myID.x;
+   __global__ void histo_offset (unsigned int* d_inputVals,
+   unsigned int* d_binHistogram,
+   unsigned int* d_offsetvec,
+   const size_t numElems, unsigned int i)
+   {
+   const int2 myID = make_int2(threadIdx.x + blockDim.x * blockIdx.x,
+   threadIdx.y + blockDim.y * blockIdx.y);
+   const int myID1D = myID.y*gridDim.x*blockDim.x + myID.x;
 
-	if (myID1D >= numElems)
-		return;
+   if (myID1D >= numElems)
+   return;
 
-	unsigned int currVal = d_inputVals[myID1D];
+   unsigned int currVal = d_inputVals[myID1D];
 
-	unsigned int mask = (numBins - 1) << i;
-	unsigned int bin = (currVal & mask) >> i;
-	d_offsetvec[myID1D] = atomicAdd(& d_binHistogram[bin], 1);
-}
-*/
+   unsigned int mask = (numBins - 1) << i;
+   unsigned int bin = (currVal & mask) >> i;
+   d_offsetvec[myID1D] = atomicAdd(& d_binHistogram[bin], 1);
+   }
+ */
 
 __global__ void compact (unsigned int* d_inputVals,
-                unsigned int* d_compact_out,
-                const size_t numElems, unsigned int i)
+		unsigned int* d_compact_out,
+		const size_t numElems, unsigned int i)
 {
-	
+
 	const int2 myID = make_int2(threadIdx.x + blockDim.x * blockIdx.x,
 			threadIdx.y + blockDim.y * blockIdx.y);
 	const int myID1D = myID.y*gridDim.x*blockDim.x + myID.x;
 
-	if (myID1D >= numElems)
-	{
+	if (myID1D >= numElems){
 		d_compact_out[myID1D] = 0;
 	}
-	else
-	{
+	else{
 		unsigned int mask = (numBins - 1) << i;
 		unsigned int bin = (d_inputVals[myID1D] & mask) >> i;
 		d_compact_out[myID1D] = !bin;
@@ -171,9 +169,8 @@ __global__ void global_correct (unsigned int *d_bins_io, const size_t numscanPat
 }
 
 __global__ void swapLocs (unsigned int* d_inputVals, unsigned int* d_inputPos,
-		unsigned int* d_outputVals, unsigned int* d_outputPos,
-		unsigned int* d_binScan, unsigned int* d_offsetvec,
-		const size_t numElems, unsigned int i)
+		unsigned int* d_outputVals, unsigned int* d_outputPos, unsigned int* d_eqnil,
+		unsigned int* d_offsetvec, const size_t numElems, unsigned int i)
 {
 	const int2 myID = make_int2(threadIdx.x + blockDim.x * blockIdx.x,
 			threadIdx.y + blockDim.y * blockIdx.y);
@@ -181,16 +178,18 @@ __global__ void swapLocs (unsigned int* d_inputVals, unsigned int* d_inputPos,
 
 	if (myID1D >= numElems)
 		return;
+	unsigned int totFalse = d_offsetvec[numElems];
 
 	unsigned int currVal = d_inputVals[myID1D];
 	unsigned int currPos = d_inputPos[myID1D];
+	unsigned int newidx = 0;
 
-	unsigned int mask = (numBins - 1) << i;
-	unsigned int bin = (currVal & mask) >> i;
+	if (d_eqnil[myID1D]){
+		newidx = d_offsetvec[myID1D];
+	}else{
+		newidx = myID1D - d_offsetvec[myID1D] + totFalse;
+	}
 
-	unsigned int newidx = d_binScan[bin] + d_offsetvec[myID1D];
-	/*if (newidx>=numElems)
-	  printf("newidx overflowed: %d\n", newidx);*/
 	d_outputVals[newidx] = currVal;
 	d_outputPos[newidx] = currPos;
 
@@ -244,19 +243,19 @@ void prefix_sum_scan (unsigned int* d_io_offset, unsigned int numthreads,
 		const size_t numElems, const int thread_x, const int thread_y, const int grids)
 {
 	unsigned int *d_init;
-        checkCudaErrors(cudaMalloc(&d_init, numElems*sizeof(unsigned int)));
-        checkCudaErrors(cudaMemcpy(d_init, d_io_offset, numElems*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
-	
-        const dim3 blockSize(thread_x, thread_y, 1);
-        const dim3 gridSize(grids, 1, 1);
+	checkCudaErrors(cudaMalloc(&d_init, numElems*sizeof(unsigned int)));
+	checkCudaErrors(cudaMemcpy(d_init, d_io_offset, numElems*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
+
+	const dim3 blockSize(thread_x, thread_y, 1);
+	const dim3 gridSize(grids, 1, 1);
 
 	blelloch_scan<<<gridSize, blockSize>>>(d_io_offset, numthreads);
 
-        blelloch_patch<<<1, gridSize>>>(d_io_offset, d_init, numthreads, numElems);
+	blelloch_patch<<<1, gridSize>>>(d_io_offset, d_init, numthreads, numElems);
 
-        hillis_postprocess<<<1, gridSize>>>(d_io_offset, numthreads, grids, numElems);
+	hillis_postprocess<<<1, gridSize>>>(d_io_offset, numthreads, grids, numElems);
 
-        global_correct<<<gridSize, blockSize>>>(d_io_offset, numthreads);
+	global_correct<<<gridSize, blockSize>>>(d_io_offset, numthreads);
 
 }
 
@@ -269,53 +268,86 @@ void your_sort(unsigned int* const d_inputVals,
 {
 	//TODO
 	//PUT YOUR SORT HERE
-	/*
-	unsigned int numtest = 256;
+/*
+	unsigned int numtest = 255;
 	unsigned int *h_testvec = new unsigned int[numtest];
-	for (unsigned int u=0;u<256;u++){
+	for (unsigned int u=0;u<numtest;u++){
 		h_testvec[u] = u;
 	}
 
-	unsigned int *d_binHisto, *d_offset, *d_binScan, *d_swapBufV, *d_swapBufP;
-	printf("numBins is %d\n", numBins);
-	printf("numElems is %d\n", (int) numElems);
-	checkCudaErrors(cudaMalloc(&d_binHisto, numBins*sizeof(unsigned int)));
-	checkCudaErrors(cudaMalloc(&d_offset, numtest*sizeof(unsigned int)));
-	checkCudaErrors(cudaMalloc(&d_binScan, numBins*sizeof(unsigned int)));
-	checkCudaErrors(cudaMalloc(&d_swapBufV, numtest*sizeof(unsigned int)));
-	checkCudaErrors(cudaMalloc(&d_swapBufP, numtest*sizeof(unsigned int)));
 
 	const int thread_x = 32;
 	const int thread_y = 32;
-	const int grids = 1;//ceil(sqrt(numtest/(thread_x*thread_y)));
+	unsigned int numthreads = thread_x*thread_y;
+	const int grids = (int)ceil((float)numtest/(float)numthreads);
 	printf("grids is %d\n", grids);
 	const dim3 blockSize(thread_x, thread_y, 1);
-	const dim3 gridSize(grids, grids, 1);
+	const dim3 gridSize(grids, 1, 1);
+
+	const unsigned int newsize = grids*numthreads;
+
+	unsigned int *h_resvec = new unsigned int[newsize];
+
+	unsigned int *d_offset, *d_swapBufV, *d_swapBufP;
+	printf("numBins is %d\n", numBins);
+	printf("numElems is %d\n", (int) numElems);
+	checkCudaErrors(cudaMalloc(&d_offset, newsize*sizeof(unsigned int)));
+	checkCudaErrors(cudaMalloc(&d_swapBufV, numtest*sizeof(unsigned int)));
+	checkCudaErrors(cudaMalloc(&d_swapBufP, numtest*sizeof(unsigned int)));
 
 	checkCudaErrors(cudaMemcpy(d_outputVals, h_testvec, numtest*sizeof(unsigned int), cudaMemcpyHostToDevice));
 	checkCudaErrors(cudaMemcpy(d_outputPos, h_testvec, numtest*sizeof(unsigned int), cudaMemcpyHostToDevice));
 
+	compact<<<gridSize, blockSize>>>(d_outputVals, d_offset, numtest, 0);
+	prefix_sum_scan(d_offset, numthreads, newsize, thread_x, thread_y, grids);
+
+	checkCudaErrors(cudaMemcpy(h_resvec, d_offset, newsize*sizeof(unsigned int), cudaMemcpyDeviceToHost));
+
+	for (int j=0;j<newsize;j++){
+		if(j<numtest)
+			std::cout << "output is " << std::bitset<16>(h_testvec[j]);
+		else
+			std::cout << "output is none";
+
+		printf(" at %d, offset is %d\n", j, h_resvec[j]);
+	}
+*/
+
+	const int thread_x = 32;
+	const int thread_y = 32;
+	unsigned int numthreads = thread_x*thread_y;
+	const int grids = (int)ceil((float)numElems/(float)numthreads);
+	printf("grids is %d\n", grids);
+	const dim3 blockSize(thread_x, thread_y, 1);
+	const dim3 gridSize(grids, 1, 1);
+
+	const unsigned int newsize = grids*numthreads;
+
+	unsigned int *d_eqnil, *d_offset, *d_swapBufV, *d_swapBufP;
+	printf("numBins is %d\n", numBins);
+	printf("numElems is %d\n", (int) numElems);
+	checkCudaErrors(cudaMalloc(&d_offset, newsize*sizeof(unsigned int)));
+	checkCudaErrors(cudaMalloc(&d_eqnil, newsize*sizeof(unsigned int)));
+	checkCudaErrors(cudaMalloc(&d_swapBufV, numElems*sizeof(unsigned int)));
+	checkCudaErrors(cudaMalloc(&d_swapBufP, numElems*sizeof(unsigned int)));
+
+	checkCudaErrors(cudaMemcpy(d_outputVals, d_inputVals, numElems*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
+	checkCudaErrors(cudaMemcpy(d_outputPos, d_inputPos, numElems*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
+
 	for (unsigned int i=0;i<bitdepth;i+=numBits)
 	{
-		checkCudaErrors(cudaMemset(d_binHisto, 0, numBins*sizeof(unsigned int)));
-		histo_offset<<<gridSize, blockSize>>>(d_outputVals, d_binHisto, d_offset, numtest, i);
+		compact<<<gridSize, blockSize>>>(d_outputVals, d_eqnil, numElems, i);
+		checkCudaErrors(cudaMemcpy(d_offset, d_eqnil, newsize*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
+
+		prefix_sum_scan(d_offset, numthreads, newsize, thread_x, thread_y, grids);
+
+		swapLocs<<<gridSize, blockSize>>>(d_outputVals, d_outputPos, d_swapBufV, d_swapBufP, d_eqnil, d_offset, numElems, i);
+
+		checkCudaErrors(cudaMemcpy(d_outputVals, d_swapBufV, numElems*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
+		checkCudaErrors(cudaMemcpy(d_outputPos, d_swapBufP, numElems*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
+
 		checkCudaErrors(cudaGetLastError());
-
-		checkCudaErrors(cudaMemcpy(d_binScan, d_binHisto, numBins*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
-		blelloch_scan<<<1, numBins>>>(d_binScan, numBins);
-		checkCudaErrors(cudaGetLastError());
-
-		cudaDeviceSynchronize();
-
-		swapLocs<<<gridSize, blockSize>>>(d_outputVals, d_outputPos, d_swapBufV, d_swapBufP, d_binScan, d_offset, numtest, i);
-		checkCudaErrors(cudaGetLastError());
-
-		checkCudaErrors(cudaMemcpy(d_outputVals, d_swapBufV, numtest*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
-		checkCudaErrors(cudaMemcpy(d_outputPos, d_swapBufP, numtest*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
-
-		cudaDeviceSynchronize();
-		checkCudaErrors(cudaGetLastError());
-
+		/*
 		unsigned int *h_binScan = new unsigned int[numBins];
 		checkCudaErrors(cudaMemcpy(h_binScan, d_binHisto, numBins*sizeof(unsigned int), cudaMemcpyDeviceToHost));
 		unsigned int sumBins = 0;
@@ -327,94 +359,39 @@ void your_sort(unsigned int* const d_inputVals,
 		for (int j=0;j<numtest;j++){
 			std::cout << "output is " << std::bitset<16>(h_testvec[j]);
 			printf(" at %d, stage = %d\n", j, i);
-		}
+		}*/
 
-	}*/
-	
-	unsigned int numtest = 3596;
-        unsigned int *h_testvec = new unsigned int[numtest];
-        unsigned int *h_resvec = new unsigned int[numtest];
-        for (unsigned int u=0;u<numtest;u++){
-                h_testvec[u] = 1;
-        }
-
-        const int thread_x = 32;
-        const int thread_y = 32;
-	int numthreads = thread_x*thread_y;
-	const int grids = (int)ceil((float)numtest/(float)numthreads);
-        printf("grids is %d\n", grids);
-        const dim3 blockSize(thread_x, thread_y, 1);
-        const dim3 gridSize(grids, grids, 1);
-	
-	const unsigned int newsize = grids*numthreads;
-
-	unsigned int *d_init;
-	checkCudaErrors(cudaMalloc(&d_init, newsize*sizeof(unsigned int)));
-        checkCudaErrors(cudaMemcpy(d_outputVals, h_testvec, newsize*sizeof(unsigned int), cudaMemcpyHostToDevice));
-        checkCudaErrors(cudaMemcpy(d_init, h_testvec, newsize*sizeof(unsigned int), cudaMemcpyHostToDevice));
-
-	prefix_sum_scan(d_outputVals, numthreads, newsize, thread_x, thread_y, grids);
+	}
 
 	/*
-	blelloch_scan<<<gridSize, blockSize>>>(d_outputVals, numthreads);
-	
-	blelloch_patch<<<1, gridSize>>>(d_outputVals, d_init, numthreads, numtest);
-	
-	hillis_postprocess<<<1, gridSize>>>(d_outputVals, numthreads, grids, numtest);
-	
-	global_correct<<<gridSize, blockSize>>>(d_outputVals, numthreads);
-	*/
-	checkCudaErrors(cudaMemcpy(h_resvec, d_outputVals, numtest*sizeof(unsigned int), cudaMemcpyDeviceToHost));
-
-	for (int j=0;j<numtest;j++){
-                        printf("sorted h at %d is  %d, original is %d\n", j, h_resvec[j], h_testvec[j]);
-         }
-
-	/*
-	   unsigned int *d_binHisto, *d_offset, *d_binScan, *d_swapBufV, *d_swapBufP;
-	   printf("numBins is %d\n", numBins);
-	   printf("numElems is %d\n", (int) numElems);
-	   checkCudaErrors(cudaMalloc(&d_binHisto, numBins*sizeof(unsigned int)));
-	   checkCudaErrors(cudaMalloc(&d_offset, numElems*sizeof(unsigned int)));
-	   checkCudaErrors(cudaMalloc(&d_binScan, numBins*sizeof(unsigned int)));
-	   checkCudaErrors(cudaMalloc(&d_swapBufV, numElems*sizeof(unsigned int)));
-	   checkCudaErrors(cudaMalloc(&d_swapBufP, numElems*sizeof(unsigned int)));
+	   unsigned int numtest = 3596;
+	   unsigned int *h_testvec = new unsigned int[numtest];
+	   unsigned int *h_resvec = new unsigned int[numtest];
+	   for (unsigned int u=0;u<numtest;u++){
+	   h_testvec[u] = 1;
+	   }
 
 	   const int thread_x = 32;
 	   const int thread_y = 32;
-	   const int grids = ceil(sqrt(numElems/(thread_x*thread_y)));
+	   int numthreads = thread_x*thread_y;
+	   const int grids = (int)ceil((float)numtest/(float)numthreads);
+	   printf("grids is %d\n", grids);
 	   const dim3 blockSize(thread_x, thread_y, 1);
 	   const dim3 gridSize(grids, grids, 1);
 
-	   checkCudaErrors(cudaMemcpy(d_outputVals, d_inputVals, numElems*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
-	   checkCudaErrors(cudaMemcpy(d_outputPos, d_inputPos, numElems*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
+	   const unsigned int newsize = grids*numthreads;
 
-	   for (unsigned int i=0;i<bitdepth;i+=numBits)
-	   {
-	   checkCudaErrors(cudaMemset(d_binHisto, 0, numBins*sizeof(unsigned int)));
-	   histo_offset<<<gridSize, blockSize>>>(d_outputVals, d_binHisto, d_offset, numElems, i);
+	   unsigned int *d_init;
+	   checkCudaErrors(cudaMalloc(&d_init, newsize*sizeof(unsigned int)));
+	   checkCudaErrors(cudaMemcpy(d_outputVals, h_testvec, newsize*sizeof(unsigned int), cudaMemcpyHostToDevice));
+	   checkCudaErrors(cudaMemcpy(d_init, h_testvec, newsize*sizeof(unsigned int), cudaMemcpyHostToDevice));
 
-	   checkCudaErrors(cudaMemcpy(d_binScan, d_binHisto, numBins*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
-	   blelloch_scan<<<1, numBins>>>(d_binScan, numBins);
+	   prefix_sum_scan(d_outputVals, numthreads, newsize, thread_x, thread_y, grids);
 
-	   cudaDeviceSynchronize();
+	   checkCudaErrors(cudaMemcpy(h_resvec, d_outputVals, numtest*sizeof(unsigned int), cudaMemcpyDeviceToHost));
 
-	   swapLocs<<<gridSize, blockSize>>>(d_outputVals, d_outputPos, d_swapBufV, d_swapBufP, d_binScan, d_offset, numElems, i);
-
-	   checkCudaErrors(cudaMemcpy(d_outputVals, d_swapBufV, numElems*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
-	   checkCudaErrors(cudaMemcpy(d_outputPos, d_swapBufP, numElems*sizeof(unsigned int), cudaMemcpyDeviceToDevice));
-
-	   cudaDeviceSynchronize();
-	   checkCudaErrors(cudaGetLastError());
-
-	   unsigned int *h_binScan = new unsigned int[numBins];
-	   checkCudaErrors(cudaMemcpy(h_binScan, d_binHisto, numBins*sizeof(unsigned int), cudaMemcpyDeviceToHost));
-	   unsigned int sumBins = 0;
-	   for (int j=0;j<numBins;j++){
-	   sumBins+=h_binScan[j];
-	   }
-	   printf("sumBins = %d", sumBins);
-
+	   for (int j=0;j<numtest;j++){
+	   printf("sorted h at %d is  %d, original is %d\n", j, h_resvec[j], h_testvec[j]);
 	   }
 	 */
 }
